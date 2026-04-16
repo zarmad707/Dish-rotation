@@ -279,10 +279,13 @@
       const urgent=timeLeft<=60&&timeLeft>0&&running;
       const timerSize=isWide?200:isMid?160:130;
       const timerFont=isWide?48:isMid?38:30;
-      const cardNameFs=isWide?30:isMid?24:20;
-      const cardIconFs=isWide?44:isMid?36:30;
-      const cardStatFs=isWide?22:isMid?18:15;
-      const cardPad=isWide?22:isMid?16:12;
+      // Scale card text based on number of workers
+      const wCount = workers.length || numWorkers;
+      const cardScale = wCount <= 2 ? 1.4 : wCount === 3 ? 1.2 : wCount === 4 ? 1.0 : 0.85;
+      const cardNameFs = Math.round((isWide?30:isMid?24:20) * cardScale);
+      const cardIconFs = Math.round((isWide?44:isMid?36:30) * cardScale);
+      const cardStatFs = Math.round((isWide?22:isMid?18:15) * cardScale);
+      const cardPad = Math.round((isWide?22:isMid?16:12) * cardScale);
       const headerFs=isWide?32:isMid?26:20;
       const btnFs=isWide?16:isMid?14:13;
       const btnPad=isWide?16:isMid?13:11;
