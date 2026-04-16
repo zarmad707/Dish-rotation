@@ -380,12 +380,12 @@
           <div style={{display:"grid",gridTemplateColumns:isWide?"auto 1fr":"1fr",gap:14,alignItems:"stretch",flex:1,minHeight:0}}>
 
             {/* TIMER PANEL */}
-            <div style={{background:"#141414",border:"2px solid #1E1E1E",borderRadius:18,padding:isMid?"20px 18px":"14px 12px",display:"flex",flexDirection:isWide?"column":"row",alignItems:"center",gap:isWide?14:12,flexWrap:isWide?"nowrap":"wrap",justifyContent:"center",height:"100%"}}>
+            <div style={{background:"#141414",border:"2px solid #1E1E1E",borderRadius:18,padding:isMid?"20px 18px":"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,height:"100%"}}>
               <div style={{position:"relative",display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                 <CircleTimer seconds={timeLeft} total={rotationTime*60} color={urgent?"#FFB800":"#2B7FFF"} size={timerSize}/>
                 <div style={{position:"absolute",fontFamily:"'Bebas Neue',monospace",fontSize:timerFont,letterSpacing:2,color:urgent?"#FFB800":"#FFF",textAlign:"center"}}>{formatTime(timeLeft)}</div>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:8,width:isWide?"100%":"auto",minWidth:isWide?0:160}}>
+              <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
                 <div style={{fontSize:10,color:urgent?"#FFB800":"#444",letterSpacing:2,textTransform:"uppercase",textAlign:"center",fontFamily:"'Space Mono',monospace"}}>
                   {urgent?"⚠️ ALMOST TIME":"until next rotation"}
                 </div>
