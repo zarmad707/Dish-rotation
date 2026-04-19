@@ -13,7 +13,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { height: 100%; width: 100%; min-height: 100vh; min-height: -webkit-fill-available; }
+    html, body, #root {
+      height: 100%; width: 100%;
+      min-height: 100vh; min-height: -webkit-fill-available;
+    }
     html { height: -webkit-fill-available; }
     body { background: #0A0A0A; overflow-x: hidden; min-height: 100vh; min-height: -webkit-fill-available; }
     input:focus { outline: none; }
@@ -22,11 +25,15 @@
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: #111; }
     ::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
-    .wcard { border-radius: 16px; border: 3px solid transparent; transition: all 0.2s; cursor: pointer; position: relative; text-align: center; overflow: hidden; }
+    .wcard { border-radius: 16px; border: 3px solid transparent; transition: all 0.2s; cursor: pointer; position: relative; overflow: hidden; }
     .wcard:active { transform: scale(0.97); }
+    .wcard.on-break { opacity: 0.45; filter: grayscale(0.7); }
     .edit-badge { position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.15); border-radius: 6px; padding: 3px 8px; font-size: 11px; opacity: 0.7; font-family: 'Space Mono', monospace; }
+    .break-badge { position: absolute; top: 10px; left: 10px; background: #333; color: #FFF; border-radius: 6px; padding: 3px 8px; font-size: 11px; font-family: 'Space Mono', monospace; letter-spacing: 1px; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
     .pulsing { animation: pulse 0.7s infinite; }
+    .task-item { transition: all 0.15s; }
+    .task-item.done { text-decoration: line-through; opacity: 0.5; }
   </style>
 </head>
 <body>
@@ -39,7 +46,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 
   <script type="text/babel">
-    const { useState, useEffect, useRef, useCallback } = React;
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
     const SECTIONS = ["Hand Wand", "3 Compartment Sink", "Dry Rack", "Trash Take Out", "Pre-Clean"];
     const SECTION_ICONS = ["🚿", "🪣", "🧺", "🗑️", "🧽"];
@@ -52,22 +59,53 @@
     ];
     const DEFAULT_MINUTES = 20;
 
-    function formatTime(s) {
-      return `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
-    }
-    function formatTS(d) {
-      return new Date(d).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
-    }
-    function formatDate(d) {
-      return new Date(d).toLocaleDateString([], { weekday:"short", month:"short", day:"numeric" });
-    }
-    function getColor(section, idx) {
-      const si = SECTIONS.indexOf(section);
-      return SECTION_COLORS[si >= 0 ? si : idx % SECTION_COLORS.length];
-    }
-    function getIcon(section, idx) {
-      const si = SECTIONS.indexOf(section);
-      return SECTION_ICONS[si >= 0 ? si : idx % SECTION_ICONS.length];
+    // Shift checklists (placeholders - user will customize)
+    const SHIFT_CHECKLISTS = {
+      opening: [
+        "Turn on dish machine and check temperature",
+        "Stock sanitizer in 3 compartment sink",
+        "Fill soap dispensers at hand sink",
+        "Check dish soap and rinse aid levels",
+        "Organize clean dish racks",
+        "Set up pre-rinse station",
+        "Stock trash cans with fresh liners",
+        "Wipe down all surfaces with sanitizer",
+      ],
+      during: [
+        "Keep dish area floor dry and clean",
+        "Empty trash cans when 3/4 full",
+        "Restock clean dishes to line as needed",
+        "Check and refill sanitizer buckets hourly",
+        "Sweep debris from drain areas",
+        "Rotate dirty dishes through machine efficiently",
+        "Keep hand sink area clean and stocked",
+      ],
+      closing: [
+        "Clean and sanitize dish machine",
+        "Drain and clean 3 compartment sink",
+        "Mop upstairs area",
+        "Deep clean the stove",
+        "Clean wok robots",
+        "Sweep and mop dish pit floor",
+        "Take out all trash",
+        "Organize and stack clean dishes",
+        "Wipe down all surfaces",
+        "Turn off dish machine",
+        "Check floor drains are clear",
+      ],
+    };
+
+    function formatTime(s) { return `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`; }
+    function formatTS(d) { return new Date(d).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
+    function formatDate(d) { return new Date(d).toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}); }
+    function getColor(section, idx) { const si = SECTIONS.indexOf(section); return SECTION_COLORS[si>=0?si:idx%SECTION_COLORS.length]; }
+    function getIcon(section, idx) { const si = SECTIONS.indexOf(section); return SECTION_ICONS[si>=0?si:idx%SECTION_ICONS.length]; }
+
+    function getShiftPhase() {
+      const h = new Date().getHours();
+      if (h >= 11 && h < 12) return "opening";
+      if (h >= 12 && h < 22) return "during";
+      return "closing";  // 10pm-midnight and early morning
     }
 
     function useContainerWidth(ref) {
@@ -98,31 +136,72 @@
       );
     }
 
-    function WorkerModal({ worker, onClose, onSave }) {
+    // ── EDIT MODAL (name, section, tasks, break) ────────────────────────────
+    function WorkerModal({ worker, onClose, onSave, onAddTask, onToggleTask, onDeleteTask, onToggleBreak }) {
       const [name, setName] = useState(worker.name);
       const [section, setSection] = useState(worker.section);
+      const [newTask, setNewTask] = useState("");
       const col = getColor(section, 0);
+
+      const handleAddTask = () => {
+        if (newTask.trim()) {
+          onAddTask(worker.id, newTask.trim());
+          setNewTask("");
+        }
+      };
+
       return (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:20}} onClick={onClose}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#1C1C1C",border:`3px solid ${col.bg}`,borderRadius:20,width:"100%",maxWidth:460,maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#1C1C1C",border:`3px solid ${col.bg}`,borderRadius:20,width:"100%",maxWidth:520,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
             <div style={{padding:"24px 24px 14px",flexShrink:0}}>
-              <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:30,color:col.bg,letterSpacing:3,marginBottom:16}}>EDIT STATION</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:30,color:col.bg,letterSpacing:3}}>EDIT WORKER</div>
+                {worker.onBreak
+                  ? <button onClick={()=>onToggleBreak(worker.id)} style={{padding:"8px 14px",borderRadius:10,background:"#27AE60",color:"#FFF",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:700}}>✓ Back from Break</button>
+                  : <button onClick={()=>onToggleBreak(worker.id)} style={{padding:"8px 14px",borderRadius:10,background:"#E9C46A",color:"#6B4800",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:13,fontWeight:700}}>☕ Send on Break</button>
+                }
+              </div>
               <div style={{color:"#AAA",fontSize:12,letterSpacing:1,textTransform:"uppercase",marginBottom:8,fontFamily:"'Space Mono',monospace"}}>Worker Name</div>
               <input value={name} onChange={e=>setName(e.target.value)}
                 style={{width:"100%",background:"#111",border:`2px solid ${col.bg}`,borderRadius:10,padding:"12px 14px",color:"#FFF",fontFamily:"'Space Mono',monospace",fontSize:16,outline:"none",boxSizing:"border-box"}}
                 placeholder="Enter name…"/>
             </div>
+
             <div style={{overflowY:"auto",flex:1,padding:"0 24px 8px"}}>
+              {/* Station assignment */}
               <div style={{color:"#AAA",fontSize:12,letterSpacing:1,textTransform:"uppercase",marginBottom:10,fontFamily:"'Space Mono',monospace"}}>Assign Station</div>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:20}}>
                 {SECTIONS.map((s,i)=>(
-                  <button key={s} onClick={()=>setSection(s)} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px",borderRadius:12,border:"2px solid",borderColor:section===s?SECTION_COLORS[i].bg:"#2A2A2A",background:section===s?SECTION_COLORS[i].light:"#141414",color:section===s?SECTION_COLORS[i].text:"#888",cursor:"pointer",fontSize:15,fontFamily:"'Space Mono',monospace"}}>
+                  <button key={s} onClick={()=>setSection(s)} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",borderRadius:12,border:"2px solid",borderColor:section===s?SECTION_COLORS[i].bg:"#2A2A2A",background:section===s?SECTION_COLORS[i].light:"#141414",color:section===s?SECTION_COLORS[i].text:"#888",cursor:"pointer",fontSize:15,fontFamily:"'Space Mono',monospace"}}>
                     <span style={{fontSize:22}}>{SECTION_ICONS[i]}</span>{s}
                     {section===s&&<span style={{marginLeft:"auto"}}>✓</span>}
                   </button>
                 ))}
               </div>
+
+              {/* Tasks */}
+              <div style={{color:"#AAA",fontSize:12,letterSpacing:1,textTransform:"uppercase",marginBottom:10,fontFamily:"'Space Mono',monospace"}}>Assigned Tasks</div>
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                <input value={newTask} onChange={e=>setNewTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")handleAddTask();}}
+                  placeholder="Add a task…"
+                  style={{flex:1,background:"#111",border:"2px solid #333",borderRadius:10,padding:"10px 12px",color:"#FFF",fontFamily:"'Space Mono',monospace",fontSize:14,outline:"none"}}/>
+                <button onClick={handleAddTask} style={{padding:"10px 18px",borderRadius:10,background:col.bg,color:"#FFF",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:14,fontWeight:700}}>+ Add</button>
+              </div>
+              {worker.tasks && worker.tasks.length > 0 ? (
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:8}}>
+                  {worker.tasks.map(t=>(
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,background:t.done?"#151a15":"#1A1A1A",border:"1px solid #2A2A2A"}}>
+                      <button onClick={()=>onToggleTask(worker.id,t.id)} style={{width:24,height:24,borderRadius:6,border:`2px solid ${t.done?"#27AE60":"#555"}`,background:t.done?"#27AE60":"transparent",color:"#FFF",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:14}}>{t.done?"✓":""}</button>
+                      <div style={{flex:1,color:t.done?"#555":"#CCC",fontSize:14,fontFamily:"'Space Mono',monospace",textDecoration:t.done?"line-through":"none"}}>{t.text}</div>
+                      <button onClick={()=>onDeleteTask(worker.id,t.id)} style={{background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:16,padding:"4px 8px"}}>🗑️</button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{color:"#444",fontSize:13,fontFamily:"'Space Mono',monospace",padding:"8px 0",fontStyle:"italic"}}>No tasks assigned.</div>
+              )}
             </div>
+
             <div style={{display:"flex",gap:10,padding:"14px 24px 22px",borderTop:"1px solid #2A2A2A",flexShrink:0}}>
               <button onClick={onClose} style={{flex:1,padding:"13px",borderRadius:12,background:"#222",color:"#888",border:"2px solid #333",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:15}}>Cancel</button>
               <button onClick={()=>onSave(name.trim()||worker.name,section)} style={{flex:2,padding:"13px",borderRadius:12,background:col.bg,color:"#FFF",border:"none",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:15,fontWeight:700}}>Save Changes</button>
@@ -132,13 +211,84 @@
       );
     }
 
+    // ── SHIFT CHECKLIST PANEL ──────────────────────────────────────────────
+    function ChecklistPanel({ onClose, checklistState, setChecklistState }) {
+      const autoPhase = getShiftPhase();
+      const [tab, setTab] = useState(autoPhase);
+      const tabs = [
+        { key:"opening", label:"Opening", time:"11am-12pm", emoji:"🌅" },
+        { key:"during",  label:"During",  time:"12pm-10pm", emoji:"🍽️" },
+        { key:"closing", label:"Closing", time:"10pm-12am", emoji:"🌙" },
+      ];
+      const items = SHIFT_CHECKLISTS[tab];
+      const state = checklistState[tab] || {};
+
+      const toggleItem = (idx) => {
+        setChecklistState(prev => ({
+          ...prev,
+          [tab]: { ...(prev[tab]||{}), [idx]: !prev[tab]?.[idx] }
+        }));
+      };
+
+      const resetTab = () => {
+        if (confirm(`Reset ${tab} checklist?`)) {
+          setChecklistState(prev => ({ ...prev, [tab]: {} }));
+        }
+      };
+
+      const completedCount = items.filter((_,i)=>state[i]).length;
+
+      return (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:998}} onClick={onClose}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#141414",borderTop:"2px solid #2A2A2A",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:800,maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
+            <div style={{padding:"20px 24px 0",borderBottom:"1px solid #222",flexShrink:0}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:28,color:"#2B7FFF",letterSpacing:3}}>SHIFT CHECKLIST</div>
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={resetTab} style={{padding:"8px 14px",borderRadius:8,background:"transparent",border:"1px solid #444",color:"#888",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:12}}>Reset</button>
+                  <button onClick={onClose} style={{padding:"8px 14px",borderRadius:8,background:"transparent",border:"1px solid #333",color:"#CCC",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:12}}>Close ✕</button>
+                </div>
+              </div>
+              {/* Tabs */}
+              <div style={{display:"flex",gap:6,marginBottom:-2}}>
+                {tabs.map(t=>{
+                  const isActive = tab===t.key;
+                  const isAuto = autoPhase===t.key;
+                  return (
+                    <button key={t.key} onClick={()=>setTab(t.key)} style={{padding:"12px 16px",background:isActive?"#1C1C1C":"transparent",border:"none",borderBottom:isActive?"3px solid #2B7FFF":"3px solid transparent",color:isActive?"#FFF":"#666",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:14,display:"flex",alignItems:"center",gap:8}}>
+                      <span>{t.emoji}</span>
+                      <span style={{fontWeight:isActive?700:400}}>{t.label}</span>
+                      {isAuto&&<span style={{background:"#2B7FFF",color:"#FFF",fontSize:9,padding:"2px 6px",borderRadius:8,letterSpacing:1}}>NOW</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{overflowY:"auto",flex:1,padding:"16px 24px 28px"}}>
+              <div style={{color:"#666",fontSize:12,fontFamily:"'Space Mono',monospace",letterSpacing:1,marginBottom:14}}>
+                {completedCount} / {items.length} complete · {tabs.find(t=>t.key===tab).time}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {items.map((item,i)=>{
+                  const done = !!state[i];
+                  return (
+                    <div key={i} onClick={()=>toggleItem(i)} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",borderRadius:12,background:done?"#0f1a0f":"#1A1A1A",border:`1px solid ${done?"#27AE60":"#2A2A2A"}`,cursor:"pointer",transition:"all 0.15s"}}>
+                      <div style={{width:26,height:26,borderRadius:8,border:`2px solid ${done?"#27AE60":"#555"}`,background:done?"#27AE60":"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,color:"#FFF",fontSize:16,fontWeight:700}}>{done?"✓":""}</div>
+                      <div style={{flex:1,color:done?"#666":"#DDD",fontSize:15,fontFamily:"'Space Mono',monospace",textDecoration:done?"line-through":"none"}}>{item}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── HISTORY PANEL ──────────────────────────────────────────────────────
     function HistoryPanel({ log, onClose, onClear }) {
-      const grouped = log.reduce((acc,e)=>{
-        const d=formatDate(e.timestamp);
-        if(!acc[d])acc[d]=[];
-        acc[d].push(e);
-        return acc;
-      },{});
+      const grouped = log.reduce((acc,e)=>{const d=formatDate(e.timestamp);if(!acc[d])acc[d]=[];acc[d].push(e);return acc;},{});
       return (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:998}} onClick={onClose}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#141414",borderTop:"2px solid #2A2A2A",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:800,maxHeight:"80vh",display:"flex",flexDirection:"column"}}>
@@ -159,15 +309,12 @@
                       <div key={ei} style={{background:"#1A1A1A",border:"1px solid #242424",borderRadius:12,padding:"12px 16px",marginBottom:8}}>
                         <div style={{color:"#555",fontSize:11,fontFamily:"'Space Mono',monospace",letterSpacing:1,marginBottom:8}}>{formatTS(entry.timestamp)} · ROTATION #{entry.rotationNum}</div>
                         <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
-                          {entry.assignments.map((a,ai)=>{
-                            const col=getColor(a.section,ai);
-                            return(
-                              <div key={ai} style={{background:col.light,color:col.text,borderRadius:8,padding:"5px 11px",fontSize:12,fontFamily:"'Space Mono',monospace",border:`1px solid ${col.bg}`}}>
-                                <span style={{fontWeight:700}}>{a.name}</span>
-                                <span style={{opacity:0.6}}> → {getIcon(a.section,ai)} {a.section}</span>
-                              </div>
-                            );
-                          })}
+                          {entry.assignments.map((a,ai)=>{const col=getColor(a.section,ai);return(
+                            <div key={ai} style={{background:col.light,color:col.text,borderRadius:8,padding:"5px 11px",fontSize:12,fontFamily:"'Space Mono',monospace",border:`1px solid ${col.bg}`}}>
+                              <span style={{fontWeight:700}}>{a.name}</span>
+                              <span style={{opacity:0.6}}> → {getIcon(a.section,ai)} {a.section}</span>
+                            </div>
+                          );})}
                         </div>
                       </div>
                     ))}
@@ -184,7 +331,7 @@
       const containerRef = useRef(null);
       const cw = useContainerWidth(containerRef);
       const isWide = cw >= 680;
-      const isMid  = cw >= 440;
+      const isMid = cw >= 440;
 
       const [screen, setScreen] = useState("setup");
       const [numWorkers, setNumWorkers] = useState(3);
@@ -198,16 +345,26 @@
       const [rotationCount, setRotationCount] = useState(0);
       const [editWorker, setEditWorker] = useState(null);
       const [showHistory, setShowHistory] = useState(false);
+      const [showChecklist, setShowChecklist] = useState(false);
       const [history, setHistory] = useState([]);
+      const [checklistState, setChecklistState] = useState({ opening:{}, during:{}, closing:{} });
       const intervalRef = useRef(null);
       const audioCtxRef = useRef(null);
       const rotationTimeRef = useRef(rotationTime);
       useEffect(()=>{rotationTimeRef.current=rotationTime;},[rotationTime]);
 
+      // Update editWorker when workers array changes (keep tasks/state in sync)
+      useEffect(() => {
+        if (editWorker) {
+          const updated = workers.find(w => w.id === editWorker.id);
+          if (updated && updated !== editWorker) setEditWorker(updated);
+        }
+      }, [workers]);
+
       const playBeep = useCallback(()=>{
-        try{
-          if(!audioCtxRef.current)audioCtxRef.current=new(window.AudioContext||window.webkitAudioContext)();
-          const ctx=audioCtxRef.current;
+        try {
+          if(!audioCtxRef.current) audioCtxRef.current = new(window.AudioContext||window.webkitAudioContext)();
+          const ctx = audioCtxRef.current;
           [0,0.25,0.5].forEach(d=>{
             const o=ctx.createOscillator(),g=ctx.createGain();
             o.connect(g);g.connect(ctx.destination);
@@ -216,29 +373,36 @@
             g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+d+0.18);
             o.start(ctx.currentTime+d);o.stop(ctx.currentTime+d+0.18);
           });
-        }catch(_){}
+        } catch(_){}
       },[]);
 
       const recordRotation = useCallback((ws,rCount)=>{
-        setHistory(h=>[...h,{timestamp:Date.now(),rotationNum:rCount,assignments:ws.map(w=>({name:w.name,section:w.section}))}]);
+        setHistory(h=>[...h,{timestamp:Date.now(),rotationNum:rCount,assignments:ws.filter(w=>!w.onBreak).map(w=>({name:w.name,section:w.section}))}]);
       },[]);
 
+      // Rotate ONLY workers who are not on break
       const doRotate = useCallback((cur,rCount)=>{
-        const n=cur.length;
-        if(!n)return cur;
-        const secs=cur.map(w=>w.section);
-        const rot=secs.map((_,i)=>secs[(i+1)%n]);
-        const next=cur.map((w,i)=>({...w,section:rot[i],prev:secs[i]}));
-        recordRotation(next,rCount);
-        return next;
+        const active = cur.filter(w => !w.onBreak);
+        if (active.length === 0) return cur;
+        const activeSecs = active.map(w => w.section);
+        const rotatedSecs = activeSecs.map((_,i) => activeSecs[(i+1)%active.length]);
+        const updated = cur.map(w => {
+          if (w.onBreak) return w;
+          const idx = active.findIndex(a => a.id === w.id);
+          return { ...w, section: rotatedSecs[idx], prev: activeSecs[idx] };
+        });
+        recordRotation(updated, rCount);
+        return updated;
       },[recordRotation]);
 
-      const handleStart=()=>{
-        const list=Array.from({length:numWorkers},(_,i)=>({
+      const handleStart = () => {
+        const list = Array.from({length:numWorkers},(_,i)=>({
           id:i+1,
           name:workerNames[i].trim()||`Worker ${i+1}`,
           section:SECTIONS[workerSections[i]%SECTIONS.length],
           prev:null,
+          tasks:[],
+          onBreak:false,
         }));
         setWorkers(list);
         setTimeLeft(rotationTime*60);
@@ -276,52 +440,67 @@
         return()=>clearInterval(intervalRef.current);
       },[running,doRotate,playBeep]);
 
-      const urgent=timeLeft<=60&&timeLeft>0&&running;
-      const timerSize=isWide?200:isMid?160:130;
-      const timerFont=isWide?48:isMid?38:30;
-      // Scale card text based on number of workers
-      const wCount = workers.length || numWorkers;
-      const cardScale = wCount <= 2 ? 1.4 : wCount === 3 ? 1.2 : wCount === 4 ? 1.0 : 0.85;
-      const cardNameFs = Math.round((isWide?30:isMid?24:20) * cardScale);
-      const cardIconFs = Math.round((isWide?44:isMid?36:30) * cardScale);
-      const cardStatFs = Math.round((isWide?22:isMid?18:15) * cardScale);
-      const cardPad = Math.round((isWide?22:isMid?16:12) * cardScale);
-      const headerFs=isWide?32:isMid?26:20;
-      const btnFs=isWide?16:isMid?14:13;
-      const btnPad=isWide?16:isMid?13:11;
+      // Task management
+      const handleAddTask = (workerId, text) => {
+        setWorkers(ws => ws.map(w => w.id===workerId
+          ? {...w, tasks:[...(w.tasks||[]), {id:Date.now()+Math.random(), text, done:false}]}
+          : w));
+      };
+      const handleToggleTask = (workerId, taskId) => {
+        setWorkers(ws => ws.map(w => w.id===workerId
+          ? {...w, tasks:(w.tasks||[]).map(t => t.id===taskId ? {...t, done:!t.done} : t)}
+          : w));
+      };
+      const handleDeleteTask = (workerId, taskId) => {
+        setWorkers(ws => ws.map(w => w.id===workerId
+          ? {...w, tasks:(w.tasks||[]).filter(t => t.id!==taskId)}
+          : w));
+      };
+      const handleToggleBreak = (workerId) => {
+        setWorkers(ws => ws.map(w => w.id===workerId ? {...w, onBreak:!w.onBreak} : w));
+      };
 
-      const nbStyle={width:isMid?52:40,height:isMid?52:40,borderRadius:"50%",border:"2px solid #333",background:"#1A1A1A",color:"#FFF",fontSize:isMid?24:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0};
-      const setupLbl={color:"#AAA",fontSize:isMid?13:11,letterSpacing:1,textTransform:"uppercase",display:"block",marginBottom:8,fontFamily:"'Space Mono',monospace"};
-      const setupInp={width:"100%",background:"#111",border:"2px solid #333",borderRadius:10,padding:isMid?"12px 14px":"9px 11px",color:"#FFF",fontFamily:"'Space Mono',monospace",fontSize:isMid?16:14,outline:"none",boxSizing:"border-box"};
+      const urgent = timeLeft<=60 && timeLeft>0 && running;
+      const wCount = workers.length || numWorkers;
+      const activeCount = workers.filter(w=>!w.onBreak).length;
+      const onBreakCount = workers.filter(w=>w.onBreak).length;
+
+      const cardScale = wCount<=2?1.4:wCount===3?1.2:wCount===4?1.0:0.85;
+      const cardNameFs = Math.round((isWide?30:isMid?24:20)*cardScale);
+      const cardIconFs = Math.round((isWide?44:isMid?36:30)*cardScale);
+      const cardStatFs = Math.round((isWide?22:isMid?18:15)*cardScale);
+      const cardPad = Math.round((isWide?22:isMid?16:12)*cardScale);
+      const headerFs = isWide?32:isMid?26:20;
+      const btnFs = isWide?16:isMid?14:13;
+      const btnPad = isWide?16:isMid?13:11;
+      const timerSize = isWide?180:isMid?150:120;
+      const timerFont = isWide?42:isMid?34:28;
+
+      const nbStyle = {width:isMid?52:40,height:isMid?52:40,borderRadius:"50%",border:"2px solid #333",background:"#1A1A1A",color:"#FFF",fontSize:isMid?24:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0};
+      const setupLbl = {color:"#AAA",fontSize:isMid?13:11,letterSpacing:1,textTransform:"uppercase",display:"block",marginBottom:8,fontFamily:"'Space Mono',monospace"};
+      const setupInp = {width:"100%",background:"#111",border:"2px solid #333",borderRadius:10,padding:isMid?"12px 14px":"9px 11px",color:"#FFF",fontFamily:"'Space Mono',monospace",fontSize:isMid?16:14,outline:"none",boxSizing:"border-box"};
 
       if(screen==="setup"){
         return(
           <div ref={containerRef} style={{minHeight:"100vh",background:"#0A0A0A",display:"flex",alignItems:"flex-start",justifyContent:"center",padding:isMid?24:16,fontFamily:"'Courier New',monospace",overflowY:"auto"}}>
             <div style={{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:16,width:"100%",maxWidth:860,paddingTop:isMid?16:8}}>
-
-              {/* LEFT */}
               <div style={{background:"#161616",border:"2px solid #222",borderRadius:20,padding:isMid?28:20}}>
                 <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:isWide?56:isMid?44:36,color:"#2B7FFF",letterSpacing:3,lineHeight:1,marginBottom:4}}>DISH<br/>ROTATION</div>
                 <div style={{color:"#444",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:28,fontFamily:"'Space Mono',monospace"}}>Kitchen Station Manager</div>
-
                 <div style={setupLbl}>Number of Workers</div>
                 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
                   <button onClick={()=>setNumWorkers(Math.max(1,numWorkers-1))} style={nbStyle}>−</button>
                   <div style={{color:"#FFF",fontFamily:"'Bebas Neue',monospace",fontSize:isWide?52:40,flex:1,textAlign:"center"}}>{numWorkers}</div>
                   <button onClick={()=>setNumWorkers(Math.min(SECTIONS.length,numWorkers+1))} style={nbStyle}>+</button>
                 </div>
-
                 <div style={setupLbl}>Rotation Timer (minutes)</div>
                 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:28}}>
                   <button onClick={()=>setRotationTime(Math.max(1,rotationTime-5))} style={nbStyle}>−</button>
                   <div style={{color:"#FFF",fontFamily:"'Bebas Neue',monospace",fontSize:isWide?52:40,flex:1,textAlign:"center"}}>{rotationTime}</div>
                   <button onClick={()=>setRotationTime(Math.min(60,rotationTime+5))} style={nbStyle}>+</button>
                 </div>
-
                 {!isWide&&<button onClick={handleStart} style={{width:"100%",padding:"16px",background:"#2B7FFF",border:"none",borderRadius:14,fontFamily:"'Bebas Neue',monospace",fontSize:26,color:"#FFF",letterSpacing:3,cursor:"pointer"}}>START SHIFT</button>}
               </div>
-
-              {/* RIGHT */}
               <div style={{background:"#161616",border:"2px solid #222",borderRadius:20,padding:isMid?28:20}}>
                 <div style={setupLbl}>Worker Names</div>
                 <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:22}}>
@@ -332,7 +511,6 @@
                     </div>
                   ))}
                 </div>
-
                 <div style={setupLbl}>Starting Stations</div>
                 <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:isWide?0:22}}>
                   {Array.from({length:numWorkers},(_,i)=>(
@@ -348,7 +526,6 @@
                     </div>
                   ))}
                 </div>
-
                 {isWide&&<button onClick={handleStart} style={{width:"100%",padding:"16px",background:"#2B7FFF",border:"none",borderRadius:14,fontFamily:"'Bebas Neue',monospace",fontSize:26,color:"#FFF",letterSpacing:3,cursor:"pointer",marginTop:22}}>START SHIFT</button>}
               </div>
             </div>
@@ -356,39 +533,40 @@
         );
       }
 
-      const cardCols=isWide?(workers.length<=3?workers.length:workers.length<=4?2:3):(isMid?2:2);
+      const cardCols = isWide?(activeCount<=3?Math.max(activeCount,workers.length<=3?workers.length:3):workers.length<=4?2:3):(isMid?2:2);
+      const actualCols = Math.min(cardCols, workers.length);
 
       return(
         <div ref={containerRef} style={{height:"100vh",background:alerting?"#001830":"#0A0A0A",transition:"background 0.4s",padding:isMid?"16px 18px":"12px 12px",fontFamily:"'Courier New',monospace",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-
           {/* TOP BAR */}
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:headerFs,color:"#2B7FFF",letterSpacing:3,lineHeight:1}}>DISH ROTATION</div>
               <div style={{background:"#1A1A1A",border:"1px solid #2A2A2A",borderRadius:14,padding:"3px 10px",color:"#555",fontSize:11,letterSpacing:1,fontFamily:"'Space Mono',monospace",whiteSpace:"nowrap"}}>#{rotationCount}</div>
+              {onBreakCount>0 && <div style={{background:"#3a2c0f",border:"1px solid #6B4800",borderRadius:14,padding:"3px 10px",color:"#E9C46A",fontSize:11,letterSpacing:1,fontFamily:"'Space Mono',monospace",whiteSpace:"nowrap"}}>☕ {onBreakCount} on break</div>}
             </div>
-            <div style={{display:"flex",gap:8}}>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={()=>setShowChecklist(true)} style={{padding:`${btnPad-3}px ${btnPad}px`,borderRadius:10,background:"#1A1A1A",border:"1px solid #2A2A2A",color:"#CCC",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:btnFs-1,whiteSpace:"nowrap"}}>✅ Checklist</button>
               <button onClick={()=>setShowHistory(true)} style={{padding:`${btnPad-3}px ${btnPad}px`,borderRadius:10,background:"#1A1A1A",border:"1px solid #2A2A2A",color:"#CCC",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:btnFs-1,whiteSpace:"nowrap"}}>📋 {history.length>0?history.length:""} Log</button>
               <button onClick={()=>{setScreen("setup");setRunning(false);setAlerting(false);}} style={{padding:`${btnPad-3}px ${btnPad}px`,borderRadius:10,background:"transparent",border:"1px solid #222",color:"#666",cursor:"pointer",fontFamily:"'Space Mono',monospace",fontSize:btnFs-1}}>⚙️</button>
             </div>
           </div>
 
           {alerting&&(
-            <div className="pulsing" style={{background:"#CC3300",color:"#FFF",textAlign:"center",padding:isMid?"16px":"12px",borderRadius:14,marginBottom:14}}>
-              <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:isWide?40:28,letterSpacing:4}}>🔔 ROTATE NOW!</div>
-              <div style={{fontSize:isMid?13:11,letterSpacing:2,opacity:0.9,fontFamily:"'Space Mono',monospace"}}>TIME IS UP — MOVE TO YOUR NEXT STATION</div>
+            <div className="pulsing" style={{background:"#CC3300",color:"#FFF",textAlign:"center",padding:isMid?"14px":"10px",borderRadius:14,marginBottom:12,flexShrink:0}}>
+              <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:isWide?36:26,letterSpacing:4}}>🔔 ROTATE NOW!</div>
+              <div style={{fontSize:isMid?12:10,letterSpacing:2,opacity:0.9,fontFamily:"'Space Mono',monospace"}}>TIME IS UP — MOVE TO YOUR NEXT STATION</div>
             </div>
           )}
 
           <div style={{display:"grid",gridTemplateColumns:isWide?"auto 1fr":"1fr",gap:14,alignItems:"stretch",flex:1,minHeight:0}}>
-
             {/* TIMER PANEL */}
-            <div style={{background:"#141414",border:"2px solid #1E1E1E",borderRadius:18,padding:isMid?"20px 18px":"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,height:"100%"}}>
+            <div style={{background:"#141414",border:"2px solid #1E1E1E",borderRadius:18,padding:isMid?"20px 18px":"14px 12px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,height:"100%",minWidth:isWide?200:"auto"}}>
               <div style={{position:"relative",display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                 <CircleTimer seconds={timeLeft} total={rotationTime*60} color={urgent?"#FFB800":"#2B7FFF"} size={timerSize}/>
                 <div style={{position:"absolute",fontFamily:"'Bebas Neue',monospace",fontSize:timerFont,letterSpacing:2,color:urgent?"#FFB800":"#FFF",textAlign:"center"}}>{formatTime(timeLeft)}</div>
               </div>
-              <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:8,width:"100%"}}>
                 <div style={{fontSize:10,color:urgent?"#FFB800":"#444",letterSpacing:2,textTransform:"uppercase",textAlign:"center",fontFamily:"'Space Mono',monospace"}}>
                   {urgent?"⚠️ ALMOST TIME":"until next rotation"}
                 </div>
@@ -402,26 +580,44 @@
             </div>
 
             {/* WORKER CARDS */}
-            <div style={{display:"grid",gridTemplateColumns:`repeat(${cardCols},1fr)`,gridAutoRows:"1fr",gap:isMid?12:8,height:"100%"}}>
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${actualCols},1fr)`,gridAutoRows:"1fr",gap:isMid?12:8,height:"100%",overflowY:"auto"}}>
               {workers.map((w,i)=>{
-                const col=getColor(w.section,i);
-                const icon=getIcon(w.section,i);
+                const col = getColor(w.section,i);
+                const icon = getIcon(w.section,i);
+                const tasks = w.tasks || [];
+                const pendingTasks = tasks.filter(t=>!t.done).length;
                 return(
-                  <div key={w.id} className={`wcard${alerting?" pulsing":""}`} style={{background:col.light,borderColor:col.bg,padding:cardPad,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}} onClick={()=>setEditWorker(w)}>
+                  <div key={w.id} className={`wcard${alerting&&!w.onBreak?" pulsing":""}${w.onBreak?" on-break":""}`}
+                    style={{background:col.light,borderColor:col.bg,padding:cardPad,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}
+                    onClick={()=>setEditWorker(w)}>
+                    {w.onBreak && <div className="break-badge">☕ ON BREAK</div>}
                     <div className="edit-badge" style={{color:col.text}}>✏️</div>
                     <div style={{color:col.text,fontSize:10,letterSpacing:2,opacity:0.5,marginBottom:4,fontFamily:"'Space Mono',monospace",textTransform:"uppercase"}}>Worker {w.id}</div>
-                    <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:cardNameFs,color:col.text,letterSpacing:1,lineHeight:1,marginBottom:6}}>{w.name}</div>
+                    <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:cardNameFs,color:col.text,letterSpacing:1,lineHeight:1,marginBottom:6,textAlign:"center"}}>{w.name}</div>
                     <div style={{fontSize:cardIconFs,margin:"6px 0"}}>{icon}</div>
-                    <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:cardStatFs,color:col.text,letterSpacing:1,lineHeight:1.2}}>{w.section}</div>
-                    {w.prev&&<div style={{fontSize:10,color:col.text,opacity:0.4,marginTop:6,fontFamily:"'Space Mono',monospace"}}>↩ {w.prev}</div>}
+                    <div style={{fontFamily:"'Bebas Neue',monospace",fontSize:cardStatFs,color:col.text,letterSpacing:1,lineHeight:1.2,textAlign:"center"}}>{w.section}</div>
+                    {pendingTasks > 0 && (
+                      <div style={{marginTop:8,background:col.bg,color:"#FFF",padding:"3px 10px",borderRadius:12,fontSize:11,fontFamily:"'Space Mono',monospace",fontWeight:700,letterSpacing:1}}>
+                        📝 {pendingTasks} task{pendingTasks>1?"s":""}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {editWorker&&<WorkerModal worker={editWorker} onClose={()=>setEditWorker(null)} onSave={(name,section)=>{setWorkers(ws=>ws.map(w=>w.id===editWorker.id?{...w,name,section}:w));setEditWorker(null);}}/>}
+          {editWorker&&<WorkerModal
+            worker={editWorker}
+            onClose={()=>setEditWorker(null)}
+            onSave={(name,section)=>{setWorkers(ws=>ws.map(w=>w.id===editWorker.id?{...w,name,section}:w));setEditWorker(null);}}
+            onAddTask={handleAddTask}
+            onToggleTask={handleToggleTask}
+            onDeleteTask={handleDeleteTask}
+            onToggleBreak={(id)=>{handleToggleBreak(id);}}
+          />}
           {showHistory&&<HistoryPanel log={history} onClose={()=>setShowHistory(false)} onClear={()=>setHistory([])}/>}
+          {showChecklist&&<ChecklistPanel onClose={()=>setShowChecklist(false)} checklistState={checklistState} setChecklistState={setChecklistState}/>}
         </div>
       );
     }
